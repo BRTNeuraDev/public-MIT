@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /tool_usage/{toolSlug} {
+      // Anyone can read analytics (public dashboard)
+      allow read: if true;
+
+      // Allow create/update with strict validation — never delete
+      allow create: if isValidAnalyticsWrite() && isValidSlug(toolSlug);
+      allow update: if isValidAnalyticsWrite();
+      allow delete: if false;
+    }
+
+    // Default: deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+
+  // Validates that tool slug matches known patterns (alphanumeric + hyphens, max 50 chars)
+  function isValidSlug(slug) {
+    return slug.size() > 0 && slug.size() <= 50;
+  }
+
+  function isValidAnalyticsWrite() {
+    let allowed = ['slug', 'name', 'totalUses', 'downloads',
+                   'lastUsedAt', 'dailyUses', 'hourlyDist', 'events'];
+
+    // Only allow expected field names
+    let validFields = request.resource.data.keys().hasOnly(allowed);
+
+    // Validate numeric types
+    let validTypes = request.resource.data.totalUses is int
+      && request.resource.data.downloads is int;
+
+    // Validate value ranges — prevent inflation attacks
+    let validValues = request.resource.data.totalUses >= 0
+      && request.resource.data.totalUses < 10000000
+      && request.resource.data.downloads >= 0
+      && request.resource.data.downloads < 10000000;
+
+    // Limit events array size — prevents unbounded growth
+    let validEvents = !("events" in request.resource.data)
+      || request.resource.data.events.size() <= 500;
+
+    // Limit document size by restricting string field lengths
+    let validStrings = request.resource.data.slug is string
+      && request.resource.data.slug.size() <= 50
+      && request.resource.data.name is string
+      && request.resource.data.name.size() <= 100;
+
+    return validFields && validTypes && validValues && validEvents && validStrings;
+  }
+}
